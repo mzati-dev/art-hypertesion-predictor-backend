@@ -7,14 +7,12 @@ import pandas as pd
 from joblib import load
 import sklearn
 import numpy as np
-from sklearn.preprocessing import OneHotEncoder
 from typing import Dict, Any, Union
-import os 
-from dotenv import load_dotenv 
-import google.generativeai as genai
+import os
+# from dotenv import load_dotenv  # Commented out - not needed without Gemini
+# import google.generativeai as genai  # Commented out - not needed without Gemini
 
-
-load_dotenv() 
+# load_dotenv()  # Commented out - not needed without Gemini
 
 app = Flask(__name__)
 CORS(app)
@@ -24,505 +22,250 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info(f"Using scikit-learn version: {sklearn.__version__}")
 
-#Gemini model
-gemini_model = None
-try:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        logger.warning("GEMINI_API_KEY environment variable not set. AI recommendations will be disabled, falling back to static lists.")
-    else:
-        genai.configure(api_key=api_key)
-        gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-        logger.info("Gemini AI model 'gemini-2.0-flash' initialized successfully.")
-except Exception as e:
-    logger.error(f"Failed to initialize Gemini AI model: {e}")
-    gemini_model = None 
-
-
-# Constants
-MALAWI_DISTRICTS = [
-    'Balaka', 'Blantyre', 'Chikwawa', 'Chiradzulu', 'Chitipa',
-    'Dedza', 'Dowa', 'Karonga', 'Kasungu', 'Likoma',
-    'Lilongwe', 'Machinga', 'Mangochi', 'Mchinji', 'Mulanje',
-    'Mwanza', 'Mzimba', 'Neno', 'Nkhata Bay', 'Nkhotakota',
-    'Nsanje', 'Ntcheu', 'Ntchisi', 'Phalombe', 'Rumphi',
-    'Salima', 'Thyolo', 'Zomba'
-]
-
-RECOMMENDATIONS = {
-    'High': [
-        "Immediate consultation with obstetric specialist required",
-        "Increased frequency of antenatal visits",
-        "Continuous fetal monitoring recommended",
-        "Consider hospitalization for close observation",
-        "Strict blood pressure monitoring",
-        "Bed rest may be advised",
-        "Emergency contact numbers provided"
-    ],
-    'Low': [
-        "Continue with regular antenatal check-ups",
-        "Maintain balanced diet with adequate protein and iron",
-        "Moderate exercise recommended",
-        "Monitor blood pressure weekly",
-        "Attend all prenatal education classes",
-        "Maintain hydration and proper rest",
-        "Report any unusual symptoms immediately"
-    ]
-}
+# Gemini model - COMMENTED OUT - not using AI recommendations
+# gemini_model = None
+# try:
+#     api_key = os.getenv("GEMINI_API_KEY")
+#     if not api_key:
+#         logger.warning("GEMINI_API_KEY environment variable not set. AI recommendations will be disabled, falling back to static lists.")
+#     else:
+#         genai.configure(api_key=api_key)
+#         gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+#         logger.info("Gemini AI model 'gemini-2.0-flash' initialized successfully.")
+# except Exception as e:
+#     logger.error(f"Failed to initialize Gemini AI model: {e}")
+#     gemini_model = None
 
 # Model and metadata initialization
 model = None
-encoder = None
-# Define default feature names and column types for the model
-FEATURE_NAMES = [
-    'Age', 'Location', 'ChronicalCondition', 'PreviousPregnancyComplication',
-    'GestationAge', 'Gravidity', 'Parity', 'AntenatalVisit', 'Systolic',
-    'Dystolic', 'PulseRate', 'location_Urban', 'SpecificComplication', 'DeliveryMode',
-    'StaffConductedDelivery'
-]
-CATEGORICAL_COLS = [
-    'Location', 'ChronicalCondition', 'PreviousPregnancyComplication',
-    'SpecificComplication', 'DeliveryMode', 'StaffConductedDelivery'
-]
-NUMERICAL_COLS = [
-    'Age', 'GestationAge', 'Gravidity', 'Parity', 'AntenatalVisit',
-    'Systolic', 'Dystolic', 'PulseRate'
+selector = None
+scaler = None
+selected_features = []
+all_features = []
+model_performance = {}
+
+# Define feature columns (from your training notebook)
+FEATURE_COLUMNS = [
+    'AGE',
+    'SEX_ENCODED',
+    'BODY MASS INDEX',
+    'YEARS ON ART',
+    'BP HISTORY',
+    'EXERCISES',
+    'BMI_CAT_ENCODED',
+    'AGE_GROUP_ENCODED',
+    'TENOFOVIR',
+    'LAMIVUDINE',
+    'DOLUTEGRAVIR',
+    'DARUNAVIR',
+    'ZIDOVUDINE',
+    'ABACAVIR'
 ]
 
-
-FEATURE_MAPPING = {
-    'age': 'age',
-    'location': 'location',
-    'chronicCondition': 'chronicalcondition',
-    'previousPregnancyComplication': 'previouspregnancycomplication',
-    'gestationAge': 'gestationage',
-    'gravidity': 'gravidity',
-    'parity': 'parity',
-    'antenatalVisit': 'antenatalvisit',
-    'systolic': 'systolic',
-    'diastolic': 'dystolic',
-    'pulseRate': 'pulserate',
-    'specificComplication': 'specificcomplication',
-    'deliveryMode': 'deliverymode',
-    'staffConductedDelivery': 'staffconducteddelivery'
+# Static recommendations based on risk level (no AI)
+RECOMMENDATIONS = {
+    'High': [
+        "Initiate or intensify antihypertensive therapy",
+        "Monitor blood pressure weekly",
+        "Consider cardiology referral",
+        "Review ART regimen for potential interactions",
+        "Strict dietary sodium restriction",
+        "Regular cardiovascular assessment"
+    ],
+    'Moderate': [
+        "Lifestyle modifications recommended",
+        "Monitor blood pressure monthly",
+        "Consider starting low-dose antihypertensive if other risk factors present",
+        "Encourage regular physical activity",
+        "Dietary counseling for weight management"
+    ],
+    'Low': [
+        "Continue current management",
+        "Monitor blood pressure every 3-6 months",
+        "Reinforce healthy lifestyle habits",
+        "Maintain regular ART adherence",
+        "Annual cardiovascular check-up"
+    ]
 }
 
-
-def load_model_with_fallback(filepath):
-    """Attempt to load model with various fallback strategies"""
+def load_model_artifacts(filepath):
+    """Load the complete model artifacts saved during training"""
     try:
-        loaded_data = load(filepath)
-
-        if isinstance(loaded_data, dict):
-            model_obj = loaded_data.get('model')
-            encoder_obj = loaded_data.get('encoder')
-            feature_names = loaded_data.get('feature_names', FEATURE_NAMES)
-            categorical_cols = loaded_data.get('categorical_cols', CATEGORICAL_COLS)
-            numerical_cols = loaded_data.get('numerical_cols', NUMERICAL_COLS)
-            return model_obj, encoder_obj, feature_names, categorical_cols, numerical_cols
-        elif hasattr(loaded_data, 'predict'):
-            logger.warning("Loaded file contains only model object, using default feature names")
-            return loaded_data, None, FEATURE_NAMES, CATEGORICAL_COLS, NUMERICAL_COLS
-        else:
-            raise ValueError("Unknown model file format")
-    except Exception as e:
-        logger.error(f"Model loading failed: {str(e)}")
-        # We don't re-raise here immediately to allow the app to start,
-        # but the `model` variable will remain None, triggering fallback behavior.
-        return None, None, FEATURE_NAMES, CATEGORICAL_COLS, NUMERICAL_COLS
-
-# Load the model globally when the app starts
-try:
-    model, encoder, FEATURE_NAMES, CATEGORICAL_COLS, NUMERICAL_COLS = load_model_with_fallback(
-        'model/maternal_system_predictor.pkl'
-    )
-    if model:
-        logger.info("Model and metadata loaded successfully.")
-        # Perform a quick test prediction
-        try:
-            # Create proper test data with correct values, aligning with FEATURE_NAMES
-            # test_data_dict = {
-            #     'Age': 25,
-            #     'Location': 'Urban',
-            #     'ChronicalCondition': 'No',
-            #     'PreviousPregnancyComplication': 'No',
-            #     'GestationAge': 38,
-            #     'Gravidity': 2,
-            #     'Parity': 1,
-            #     'AntenatalVisit': 4,
-            #     'Systolic': 120,
-            #     'Dystolic': 80, # This maps to 'diastolic' in API input but 'Dystolic' in model features
-            #     'PulseRate': 70,
-            #     'SpecificComplication': 'No',
-            #     'DeliveryMode': 'Spontaneous Vertex Delivery',
-            #     'StaffConductedDelivery': 'Skilled'
-            # }
-
-            test_data_dict = {
-                'age': 25,
-                'location': 'Urban',
-                'chronicalcondition': 'None',
-                'previouspregnancycomplication': 'None',
-                'gestationage': 38,
-                'gravidity': 2,
-                'parity': 1,
-                'antenatalvisit': 4,
-                'systolic': 120,
-                'dystolic': 80,
-                'pulserate': 70,
-                'specificcomplication': 'None',
-                'deliverymode': 'Spontaneous Vertex Delivery',
-                'staffconducteddelivery': 'Skilled'
-            }
-            test_df = pd.DataFrame([test_data_dict])
-
-            if encoder:
-                # Ensure the test_df has the categorical columns for transformation
-                encoded_categorical = encoder.transform(test_df[CATEGORICAL_COLS])
-                encoded_df = pd.DataFrame(encoded_categorical,
-                                          columns=encoder.get_feature_names_out(CATEGORICAL_COLS))
-                numerical_df = test_df[NUMERICAL_COLS]
-                test_df_processed = pd.concat([numerical_df, encoded_df], axis=1)
-            else:
-                test_df_processed = test_df[NUMERICAL_COLS] # If no encoder, only numerical is possible without errors
-
-            
-            # This handles cases where the model expects more features than what's available
-            # due to dynamic one-hot encoding or specific training setups.
-            # Create a full DataFrame with all expected features, initialized to 0
-            full_test_df = pd.DataFrame(0, index=[0], columns=FEATURE_NAMES if not encoder else test_df_processed.columns)
-            # Update with actual values from processed test_df
-            for col in test_df_processed.columns:
-                if col in full_test_df.columns:
-                    full_test_df[col] = test_df_processed[col]
-
-            # Reorder columns to match the model's expected feature order
-            if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
-                final_test_df = full_test_df[model.feature_names_in_]
-            else:
-                final_test_df = full_test_df # Fallback if model doesn't expose feature_names_in_
-
-            prediction = model.predict(final_test_df)
-            logger.info(f"Model test successful. Prediction: {prediction}")
-        except Exception as e:
-            logger.error(f"Model test failed during prediction: {str(e)}", exc_info=True)
-            model = None # Set model to None to ensure fallback logic is used
-    else:
-        logger.warning("Model was not loaded. Falling back to rule-based risk assessment.")
-except Exception as e:
-    logger.error(f"Error during model initialization or initial test: {str(e)}", exc_info=True)
-    model = None # Ensure model is None if there's any loading error
-
-# --- Gemini Recommendation Function ---
-def generate_ai_recommendations(patient_data: dict, risk_level: str) -> list:
-    """
-    Generates personalized recommendations using the Gemini AI model.
-    Falls back to a static list if the AI model is unavailable or fails.
-    """
-    # If the Gemini model wasn't initialized, use the static recommendations
-    if not gemini_model:
-        logger.warning("Gemini model not available. Using static recommendations for the assessed risk level.")
-        return RECOMMENDATIONS[risk_level]
-
-    # Prepare the prompt for the AI model
-    prompt = f"""
-    Given the following maternal health case data:
-    - Age: {patient_data.get('age')}
-    - Gravidity: {patient_data.get('gravidity')}
-    - Systolic BP: {patient_data.get('systolic')}
-    - Diastolic BP: {patient_data.get('diastolic')}
-    - Pulse Rate: {patient_data.get('pulseRate')}
-    - Delivery Mode: {patient_data.get('deliveryMode')}
-    - Specific Complication: {patient_data.get('specificComplication')}
-    - Chronic Condition: {patient_data.get('chronicCondition')}
-    - Antenatal Visits: {patient_data.get('antenatalVisit')}
-    - Assessed Risk Level: {risk_level}
-
-    Please provide 3–5 personalized, concise, and medically relevant maternal care     recommendations to reduce maternal and fetal risk.
-    Format the response as a simple list, with each recommendation on a new line.      Do not use markdown like bullet points (- or *).
-    """
-
-    try:
-        logger.info("Sending request to Gemini for AI-based recommendations.")
-        response = gemini_model.generate_content(prompt)
-        text_output = response.text.strip()
-
-        # Split the text response into a list of individual recommendations
-        recommendations = [line.lstrip("-• ").strip() for line in        text_output.split("\n") if line.strip()]
+        artifacts = load(filepath)
         
-        # If the AI returns an empty or invalid response, fall back to static list
-        if not recommendations:
-             logger.warning("Gemini returned an empty response. Falling back to static recommendations.")
-             return RECOMMENDATIONS[risk_level]
-
-        logger.info("Successfully received recommendations from Gemini.")
-        return recommendations
+        # Extract all components
+        model_obj = artifacts.get('model')
+        selector_obj = artifacts.get('selector')
+        scaler_obj = artifacts.get('scaler')
+        selected_feats = artifacts.get('selected_features')
+        all_feats = artifacts.get('all_features', FEATURE_COLUMNS)
+        performance = artifacts.get('model_performance', {})
+        
+        logger.info(f"Model loaded successfully. Best model: {performance.get('best_model', 'Unknown')}")
+        logger.info(f"Model performance - AUC: {performance.get('test_auc', 'N/A')}, Accuracy: {performance.get('test_accuracy', 'N/A')}")
+        
+        return model_obj, selector_obj, scaler_obj, selected_feats, all_feats, performance
     except Exception as e:
-        logger.error(f"Gemini recommendation generation error: {e}. Falling back to static recommendations.")
-        # If any error occurs during the API call, use the static recommendations as a fallback
-        return RECOMMENDATIONS[risk_level]
-    
+        logger.error(f"Failed to load model artifacts: {str(e)}")
+        return None, None, None, None, FEATURE_COLUMNS, {}
+
+# Load the specific model file
+MODEL_FILENAME = 'hypertension_model_20260308_181557 (1).pkl'
+
+# Try different locations to find the model
+model_paths = [
+    f'model/{MODEL_FILENAME}',
+    f'models/{MODEL_FILENAME}',
+    MODEL_FILENAME,
+    f'./{MODEL_FILENAME}'
+]
+
+loaded = False
+for model_path in model_paths:
+    try:
+        if os.path.exists(model_path):
+            logger.info(f"Attempting to load model from: {model_path}")
+            model, selector, scaler, selected_features, all_features, model_performance = load_model_artifacts(model_path)
+            if model is not None:
+                logger.info(f"✅ Successfully loaded model from {model_path}")
+                loaded = True
+                break
+    except Exception as e:
+        logger.warning(f"Failed to load from {model_path}: {str(e)}")
+        continue
+
+if not loaded:
+    logger.error(f"❌ CRITICAL: Could not load model from any path. API cannot start without model.")
+    # Exit or raise exception - we don't want to run without the model
+    raise RuntimeError(f"Model file {MODEL_FILENAME} not found. Please ensure the model file is in the correct location.")
+
+logger.info(f"✅ Model loaded successfully. Ready to accept requests.")
 
 def validate_input(data: Dict[str, Any]) -> Union[None, Dict[str, str]]:
-    """Validate input data against model requirements"""
-    # Use FEATURE_MAPPING values as expected fields in the model context
-    required_fields = set(FEATURE_MAPPING.keys())
+    """Validate input data for ART patient hypertension prediction"""
+    # Use the loaded selected features if available, otherwise use all features
+    features_to_validate = selected_features if selected_features is not None else all_features
+    required_fields = set(features_to_validate)
     missing_fields = required_fields - set(data.keys())
+    
     if missing_fields:
         return {'error': f'Missing required fields: {", ".join(missing_fields)}'}
 
     type_errors = []
-    # These are the keys from the incoming API request
-    numeric_fields = ['age', 'gestationAge', 'gravidity', 'parity', 'antenatalVisit',
-                      'systolic', 'diastolic', 'pulseRate']
-
+    
+    # Numeric fields validation
+    numeric_fields = ['AGE', 'BODY MASS INDEX', 'YEARS ON ART']
+    binary_fields = ['SEX_ENCODED', 'BP HISTORY', 'EXERCISES', 
+                     'TENOFOVIR', 'LAMIVUDINE', 'DOLUTEGRAVIR', 
+                     'DARUNAVIR', 'ZIDOVUDINE', 'ABACAVIR']
+    categorical_fields = ['BMI_CAT_ENCODED', 'AGE_GROUP_ENCODED']
+    
+    # Validate numeric fields
     for field in numeric_fields:
-        try:
-            # Ensure values are convertible to float
-            float(data[field])
-        except (ValueError, TypeError):
-            type_errors.append(f"{field} must be a number")
-
-    # Range validations
-    if 'age' in data and (float(data['age']) < 10 or float(data['age']) > 60):
-        type_errors.append("Age must be between 10 and 60 years")
-    if 'gestationAge' in data and (float(data['gestationAge']) < 0 or float(data['gestationAge']) > 45):
-        type_errors.append("Gestation age must be between 0 and 45 weeks")
-    if 'systolic' in data and (float(data['systolic']) < 50 or float(data['systolic']) > 300):
-        type_errors.append("Systolic BP must be between 50 and 300 mmHg")
-    if 'diastolic' in data and (float(data['diastolic']) < 30 or float(data['diastolic']) > 200):
-        type_errors.append("Diastolic BP must be between 30 and 200 mmHg")
-    if 'pulseRate' in data and (float(data['pulseRate']) < 30 or float(data['pulseRate']) > 220):
-        type_errors.append("Pulse rate must be between 30 and 220 bpm")
-    if data.get('location') not in MALAWI_DISTRICTS:
-        type_errors.append("Invalid district selected")
+        if field in data:
+            try:
+                val = float(data[field])
+                # if field == 'AGE' and (val < 18 or val > 100):
+                #     type_errors.append(f"{field} must be between 18 and 100 years")
+                if field == 'AGE' and (val < 0 or val > 120):
+                    type_errors.append(f"{field} must be between 0 and 120 years")
+                # if field == 'BODY MASS INDEX' and (val < 10 or val > 60):
+                #     type_errors.append(f"{field} must be between 10 and 60")
+                if field == 'BODY MASS INDEX' and (val < 7 or val > 200):
+                    type_errors.append(f"{field} must be between 7 and 200")
+                if field == 'YEARS ON ART' and (val < 0 or val > 120):
+                    type_errors.append(f"{field} must be between 0 and 120 years")
+            except (ValueError, TypeError):
+                type_errors.append(f"{field} must be a number")
+    
+    # Validate binary fields (should be 0 or 1)
+    for field in binary_fields:
+        if field in data:
+            try:
+                val = int(data[field])
+                if val not in [0, 1]:
+                    type_errors.append(f"{field} must be 0 or 1")
+            except (ValueError, TypeError):
+                type_errors.append(f"{field} must be 0 or 1")
+    
+    # Validate categorical fields
+    for field in categorical_fields:
+        if field in data:
+            try:
+                val = int(data[field])
+                if field == 'BMI_CAT_ENCODED' and val not in [0, 1, 2, 3]:
+                    type_errors.append(f"{field} must be 0 (Underweight), 1 (Normal), 2 (Overweight), or 3 (Obese)")
+                if field == 'AGE_GROUP_ENCODED' and val not in [0, 1, 2, 3, 4]:
+                    type_errors.append(f"{field} must be 0 (<30), 1 (30-40), 2 (40-50), 3 (50-60), or 4 (60+)")
+            except (ValueError, TypeError):
+                type_errors.append(f"{field} must be an integer")
 
     if type_errors:
         return {'error': " | ".join(type_errors)}
 
     return None
 
-def prepare_input_data_for_model(api_data: Dict[str, Any]) -> pd.DataFrame:
-    """Convert API input to model-ready DataFrame, applying one-hot encoding."""
-    # Map API input keys to model's expected feature names
-    mapped_data = {
-        FEATURE_MAPPING[k]: v
-        for k, v in api_data.items()
-        if k in FEATURE_MAPPING
-    }
-
-    # Create DataFrame from the mapped single record
-    input_df = pd.DataFrame([mapped_data])
-
-    if encoder:
-        # Separate numerical and categorical columns
-        numerical_df = input_df[NUMERICAL_COLS]
-        categorical_df = input_df[CATEGORICAL_COLS]
-
-        # One-hot encode categorical features
-        # Handle potential KeyError if a category not seen during training appears
-        try:
-            encoded_categorical = encoder.transform(categorical_df)
-            encoded_df = pd.DataFrame(encoded_categorical.toarray(), 
-                                      columns=encoder.get_feature_names_out(CATEGORICAL_COLS),
-                                      index=input_df.index) 
-        except ValueError as e:
-            logger.error(f"Error during encoding: {e}. This might be due to unseen categories. "
-                         f"Input categorical data: {categorical_df.to_dict('records')}")
-          
-            raise ValueError(f"Failed to encode categorical features: {e}. "
-                             "Ensure all categories in request data were present during model training.")
-
-
-        # Concatenate numerical and encoded categorical features
-        processed_df = pd.concat([numerical_df, encoded_df], axis=1)
-    else:
-       
-        processed_df = input_df[NUMERICAL_COLS]
-        logger.warning("No encoder available. Only numerical columns will be used for prediction.")
-
-
-   
-    if model and hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
-        # Create a DataFrame with all expected features, initialized to 0 or NaN
-        final_input_df = pd.DataFrame(0, index=processed_df.index, columns=model.feature_names_in_)
-        # Fill with actual processed data
-        for col in processed_df.columns:
-            if col in final_input_df.columns:
-                final_input_df[col] = processed_df[col]
-        # Return the DataFrame with columns in the exact order the model expects
-        return final_input_df[model.feature_names_in_]
-    else:
-       
-        logger.warning("Model's feature_names_in_ not found or model not loaded. "
-                       "Proceeding with available processed features. This might lead to prediction errors.")
-        return processed_df
-
-def calculate_risk(patient_data):
-    """Calculate risk based on patient data using logical rules"""
-   
-    age = patient_data.get('age', 0)
-    gravidity = patient_data.get('gravidity', 0)
-    parity = patient_data.get('parity', 0)
-    gestation_age = patient_data.get('gestationAge', 0)
-    systolic = patient_data.get('systolic', 0)
-    diastolic = patient_data.get('diastolic', 0)
-    antenatal_visit = patient_data.get('antenatalVisit', 0)
-    delivery_mode = patient_data.get('deliveryMode', '')
-    specific_complication = patient_data.get('specificComplication', '')
-    pulse_rate = patient_data.get('pulseRate', 0)
-    chronic_condition = patient_data.get('chronicCondition', '')
-    previous_complication = patient_data.get('previousPregnancyComplication', '')
-    staff_conducted_delivery = patient_data.get('staffConductedDelivery', '')
-
-    # High-Risk Factors (will trigger High Risk if true)
-   
-    few_visits_risk = False
-    visit_probability = 0.0
-
-    if antenatal_visit < 4:
-        few_visits_risk = True
-        visit_probability = 0.7  
-        
-        # Increase risk if late in pregnancy with few visits
-        if gestation_age > 28:  # Third trimester
-            visit_probability = 0.85
-        elif gestation_age > 20:  # Second trimester
-            visit_probability = 0.75
-            
-        # First-time mothers with few visits are higher risk
-        if parity == 0:
-            visit_probability = min(visit_probability + 0.1, 0.95)
-            
-        # Existing complications make few visits even riskier
-        if specific_complication != 'None' or chronic_condition != 'None':
-            visit_probability = min(visit_probability + 0.15, 1.0)
-
-    age_risk = age <= 16 or age >= 35
-    gravidity_risk = gravidity >= 4
-    bp_risk = systolic >= 140 or diastolic >= 90
-    few_antenatal_visits = antenatal_visit < 4
-    cesarean_risk = delivery_mode == "Caesarean Section"
-    chronic_condition_risk = chronic_condition != "None"
-    complication_risk = specific_complication != "None"
-    pulseRateRisk = pulse_rate <= 60 or pulse_rate >= 100
-
-    # Combine high-risk factors for initial risk level
-    is_high_risk = (age_risk or gravidity_risk or bp_risk or
-                    few_antenatal_visits or cesarean_risk or complication_risk or chronic_condition_risk or pulseRateRisk)
-
-    risk_level = 'High' if is_high_risk else 'Low'
-
-    # Probability calculation 
-    probability = 0.0 # Default low probability
-
-    if cesarean_risk:
-        probability = 0.95
-    elif complication_risk:
-        probability = 0.9
-    elif chronic_condition_risk:
-        probability = 0.88
-    elif bp_risk:
-        probability = 0.85
-    elif age_risk:
-        probability = 0.8
-    elif gravidity_risk:
-        probability = 0.75
-    elif few_antenatal_visits:
-        probability = 0.7
-    elif few_visits_risk:
-        probability = visit_probability
-    elif pulseRateRisk:
-        probability = 0.8
-
-    # Low-risk factors slightly increase probability for 'Low' risk
+def prepare_input_for_model(api_data: Dict[str, Any]):
+    """Convert API input to model-ready format"""
+    if model is None:
+        return None
     
-    elif previous_complication != "None":
-        probability = max(probability, 0.35)
-    elif staff_conducted_delivery == "Unskilled":
-        probability = max(probability, 0.3)
+    # Create DataFrame with all features
+    input_dict = {}
+    for feature in all_features:
+        input_dict[feature] = [api_data.get(feature, 0)]
+    
+    input_df = pd.DataFrame(input_dict)
+    
+    # Apply scaling if scaler exists
+    if scaler is not None:
+        input_scaled = scaler.transform(input_df[all_features])
+        input_df_scaled = pd.DataFrame(input_scaled, columns=all_features)
     else:
-        # If no specific rules triggered, and not high risk, assign a low probability
-        if not is_high_risk:
-            probability = 0.2
+        input_df_scaled = input_df
+    
+    # Apply feature selection if selector exists
+    if selector is not None:
+        input_selected = selector.transform(input_df_scaled[all_features])
+        return input_selected
+    else:
+        # If no selector, use selected_features list to filter
+        if selected_features is not None:
+            return input_df_scaled[selected_features].values
+        else:
+            return input_df_scaled[all_features].values
 
-    # If is_high_risk is true, ensure probability is at least 0.5 (or higher based on specific rule)
-    if is_high_risk and probability < 0.5:
-        probability = 0.5 # A baseline for high risk
+def calculate_risk_level(probability: float) -> str:
+    """Convert probability to risk level"""
+    if probability >= 0.6:
+        return "High"
+    elif probability >= 0.3:
+        return "Moderate"
+    else:
+        return "Low"
 
-    return risk_level, probability
-
-def override_risk_based_on_rules(input_data: Dict[str, Any], current_risk: str, current_prob: float) -> tuple:
-    """
-    Override the model's risk assessment based on specific high-risk rules.
-    Returns tuple of (updated_risk, updated_probability)
-    """
-    try:
-        # Convert all inputs to appropriate types
-      
-        age = float(input_data.get('age', 0))
-        gravidity = int(float(input_data.get('gravidity', 0)))
-        parity = int(float(input_data.get('parity', 0)))
-        gestation_age = float(input_data.get('gestationAge', 0))
-        antenatal_visit = int(float(input_data.get('antenatalVisit', 0)))
-        systolic = float(input_data.get('systolic', 0))
-        diastolic = float(input_data.get('diastolic', 0))
-        specific_complication = input_data.get('specificComplication', 'None') # Assume 'No' if not present
-        chronic_condition = input_data.get('chronicCondition', 'None')
-        logger.info(f"Checking override rules with - Age: {age}, Gravidity: {gravidity}, Parity: {parity}, BP: {systolic}/{diastolic}, Complication: {specific_complication}")
-
-        # Rule 1: Very young mother with existing children
-        if age <= 16 and (parity >= 1 or gravidity > 1):
-            logger.info("RULE TRIGGERED: Young mother with existing children -> High Risk (0.95)")
-            return ("High", 0.95)
-
-        # Rule 2: Abnormal blood pressure (High or Low)
-        if systolic >= 140 or diastolic >= 90:
-            logger.info(f"RULE TRIGGERED: High BP ({systolic}/{diastolic}) -> High Risk (0.9)")
-            return ("High", 0.9)
-
-        if systolic < 90 or diastolic < 60:
-            logger.info(f"RULE TRIGGERED: Low BP ({systolic}/{diastolic}) -> High Risk (0.85)")
-            return ("High", 0.85)
-
-        # Rule 3: Specific Complication present
-        if specific_complication != "None":
-            logger.info("RULE TRIGGERED: Specific Complication present -> High Risk (0.98)")
-            return ("High", 0.98) # Very high probability if explicit complication
-       
-        if chronic_condition != "None":
-           logger.info(f"RULE TRIGGERED: Chronic condition ({chronic_condition}) -> High Risk (0.9)")
-           return ("High", 0.9)
-        if antenatal_visit < 2 and gestation_age > 20:
-           return ("High", 0.95)
-        elif antenatal_visit < 4 and gestation_age > 28:
-            
-           return ("High", 0.9)
-
-        logger.info("No override rules triggered, using model prediction (or initial logic prediction).")
-        return (current_risk, current_prob)
-
-    except Exception as e:
-        logger.error(f"Error in risk override: {str(e)}", exc_info=True)
-       
-        return (current_risk, current_prob)
-
+# REMOVED Gemini AI function - using static recommendations only
+def get_recommendations(risk_level: str) -> list:
+    """Return static recommendations based on risk level"""
+    return RECOMMENDATIONS[risk_level]
 
 @app.route('/')
 def home():
     return jsonify({
         "status": "active",
-        "service": "Maternal Health Risk Prediction API",
+        "service": "Hypertension Risk Prediction API for ART Patients",
         "model_loaded": model is not None,
-        "expected_features": FEATURE_NAMES,
-        "categorical_columns": CATEGORICAL_COLS,
-        "numerical_columns": NUMERICAL_COLS,
+        "model_file": MODEL_FILENAME if model is not None else None,
+        "selector_loaded": selector is not None,
+        "scaler_loaded": scaler is not None,
+        "features_count": len(selected_features) if selected_features is not None else 0,
+        "model_performance": model_performance if model_performance else {},
         "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/api/predict', methods=['POST'])
 def assess_risk():
-    """Endpoint for assessing maternal risk, using model with rule-based override or fallback logic."""
+    """Endpoint for assessing hypertension risk in ART patients - using only trained model"""
     start_time = time.time()
 
     try:
@@ -533,68 +276,60 @@ def assess_risk():
 
         logger.info(f"Received request data: {data}")
 
-     
         validation_error = validate_input(data)
         if validation_error:
             logger.error(f"Validation error: {validation_error['error']}")
             return jsonify(validation_error), 400
 
-        original_risk = None
-        original_probability = None
-        risk_override_applied = False
+        # Check if model is loaded (should be, but double-check)
+        if model is None:
+            logger.error("Model not loaded - this should not happen")
+            return jsonify({
+                'error': True,
+                'message': 'Model not available. Please contact administrator.',
+                'status': 'model_unavailable'
+            }), 503
 
-        # Attempt model prediction first if model is loaded
-        if model:
-            try:
-                processed_input_df = prepare_input_data_for_model(data)
-                logger.info(f"Prepared input for model. Columns: {processed_input_df.columns.tolist()}")
+        # Prepare input for model
+        input_processed = prepare_input_for_model(data)
+        
+        if input_processed is None:
+            return jsonify({'error': 'Failed to process input data'}), 500
 
-                predicted_class = model.predict(processed_input_df)[0]
-                prediction_proba = model.predict_proba(processed_input_df)[0][1] # Probability of 'High' risk
+        # Make prediction using ONLY the trained model
+        try:
+            predicted_class = model.predict(input_processed)[0]
+            prediction_proba = model.predict_proba(input_processed)[0][1]
+            
+            risk_level = calculate_risk_level(prediction_proba)
+            
+            logger.info(f"Model predicted: Class = {predicted_class}, Probability = {prediction_proba:.4f}, Risk Level = {risk_level}")
+        except Exception as e:
+            logger.error(f"Error during model prediction: {str(e)}", exc_info=True)
+            return jsonify({
+                'error': True,
+                'message': 'Model prediction failed',
+                'details': str(e)
+            }), 500
 
-                original_risk = "High" if predicted_class == 1 else "Low"
-                original_probability = float(prediction_proba)
-
-                logger.info(f"Model predicted: Risk Level = {original_risk}, Probability = {original_probability}")
-
-                # Apply rule-based override on model's prediction
-                current_risk, current_probability = override_risk_based_on_rules(data, original_risk, original_probability)
-                if current_risk != original_risk or current_probability != original_probability:
-                    risk_override_applied = True
-                    logger.info("Model prediction overridden by rules.")
-
-            except Exception as e:
-                logger.error(f"Error during model prediction or preprocessing: {str(e)}. Falling back to logic-based assessment.", exc_info=True)
-                # Fallback to logic-based assessment if model prediction fails
-                current_risk, current_probability = calculate_risk(data)
-                risk_override_applied = False # No override if model failed
-                original_risk = None # Clear original model predictions
-                original_probability = None
-        else:
-            logger.warning("Model not loaded or failed to load. Using logic-based risk assessment.")
-            # Use logic-based approach if model is not available
-            current_risk, current_probability = calculate_risk(data)
-            risk_override_applied = False # No override as no model prediction to override
-            # --- Call Gemini for recommendations ---
-
-        recommendations = generate_ai_recommendations(data, current_risk)
-       
+        # Get static recommendations (no AI)
+        recommendations = get_recommendations(risk_level)
 
         response = {
             "patientId": data.get('patientId', f"patient-{int(time.time() * 1000)}"),
-            "patientName": data.get('name', 'N/A'), 
-            "riskLevel": current_risk,
-            "probability": round(current_probability, 4),
+            "patientName": data.get('name', 'N/A'),
+            "riskLevel": risk_level,
+            "probability": round(prediction_proba, 4),
+            "riskScore": f"{prediction_proba:.1%}",
+            "prediction": "Hypertension" if predicted_class == 1 else "No Hypertension",
             "recommendations": recommendations,
             "timestamp": datetime.utcnow().isoformat() + 'Z',
-            "inputFeatures": data,
-            "riskOverrideApplied": risk_override_applied,
-            "originalRisk": original_risk if risk_override_applied else None,
-            "originalProbability": round(original_probability, 4) if risk_override_applied else None,
+            "inputFeatures": {k: v for k, v in data.items() if k in (selected_features or [])},
+            "modelUsed": type(model).__name__,
             "processingTimeMs": int((time.time() - start_time) * 1000)
         }
 
-        logger.info(f"Final assessment response: {response}")
+        logger.info(f"Final assessment response sent")
         return jsonify(response)
 
     except Exception as e:
@@ -607,24 +342,43 @@ def assess_risk():
             'processingTimeMs': int((time.time() - start_time) * 1000)
         }), 500
 
-@app.route('/api/districts', methods=['GET'])
-def get_districts():
-    """Endpoint to get list of Malawi districts"""
-    return jsonify({
-        'districts': MALAWI_DISTRICTS
-    })
-
-@app.route('/health', methods=['GET'])
+@app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None,
-        # --- Added Gemini status to health check ---
-        'gemini_model_loaded': gemini_model is not None,
-      
+        'model_file': MODEL_FILENAME if model is not None else None,
+        # 'gemini_model_loaded': gemini_model is not None,  # Commented out
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    })
+
+@app.route('/api/model/info', methods=['GET'])
+def model_info():
+    """Get detailed model information"""
+    if model is None:
+        return jsonify({
+            'error': 'Model not loaded',
+            'status': 'unavailable',
+            'model_file': MODEL_FILENAME
+        }), 404
+    
+    return jsonify({
+        'model_type': type(model).__name__,
+        'model_file': MODEL_FILENAME,
+        'features_used': len(selected_features) if selected_features else 0,
+        'selected_features': selected_features if selected_features else [],
+        'all_features': all_features,
+        'performance': model_performance if model_performance else {},
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    logger.info(f"Starting Hypertension Risk Prediction API - MODEL ONLY mode")
+    logger.info(f"Looking for model file: {MODEL_FILENAME}")
+    logger.info("Gemini AI is DISABLED - using static recommendations only")
+    
+    # The app will only start if model loads successfully
+    # If model fails to load, it will raise an exception
+    
+    app.run(host='0.0.0.0', port=5001, debug=True)

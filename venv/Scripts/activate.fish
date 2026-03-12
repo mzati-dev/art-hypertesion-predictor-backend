@@ -33,7 +33,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV 'C:\Users\JOKER\Desktop\The App\maternal-risk-prediction-backend-main\venv'
+set -gx VIRTUAL_ENV 'C:\Users\wadim\OneDrive\Documents\Projects\health-projects\maternal-backend\venv'
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/"Scripts $PATH
