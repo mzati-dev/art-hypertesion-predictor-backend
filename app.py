@@ -9,10 +9,10 @@ import sklearn
 import numpy as np
 from typing import Dict, Any, Union
 import os
-# from dotenv import load_dotenv  # Commented out - not needed without Gemini
-# import google.generativeai as genai  # Commented out - not needed without Gemini
+from dotenv import load_dotenv  # Commented out - not needed without Gemini
+import google.generativeai as genai  # Commented out - not needed without Gemini
 
-# load_dotenv()  # Commented out - not needed without Gemini
+load_dotenv()  # Commented out - not needed without Gemini
 
 app = Flask(__name__)
 CORS(app)
@@ -35,6 +35,24 @@ logger.info(f"Using scikit-learn version: {sklearn.__version__}")
 # except Exception as e:
 #     logger.error(f"Failed to initialize Gemini AI model: {e}")
 #     gemini_model = None
+
+
+# Gemini model setup
+gemini_model = None
+
+try:
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    if not api_key:
+        logger.warning("GEMINI_API_KEY not set. Falling back to static recommendations.")
+    else:
+        genai.configure(api_key=api_key)
+        gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+        logger.info("✅ Gemini 2.5 Flash initialized successfully")
+
+except Exception as e:
+    logger.error(f"❌ Gemini initialization failed: {e}")
+    gemini_model = None
 
 # Model and metadata initialization
 model = None
@@ -245,9 +263,64 @@ def calculate_risk_level(probability: float) -> str:
         return "Low"
 
 # REMOVED Gemini AI function - using static recommendations only
-def get_recommendations(risk_level: str) -> list:
-    """Return static recommendations based on risk level"""
-    return RECOMMENDATIONS[risk_level]
+# def get_recommendations(risk_level: str) -> list:
+#     """Return static recommendations based on risk level"""
+#     return RECOMMENDATIONS[risk_level]
+
+def get_recommendations(risk_level: str, patient_data: dict) -> list:
+    """
+    Generate recommendations using Gemini AI with fallback to static
+    """
+
+    # Fallback if Gemini not available
+    if gemini_model is None:
+        return RECOMMENDATIONS[risk_level]
+
+    try:
+        prompt = f"""
+        You are a clinical assistant.
+
+        A patient has {risk_level} risk of hypertension.
+
+        Key patient data:
+        - Age: {patient_data.get('AGE')}
+        - BMI: {patient_data.get('BODY MASS INDEX')}
+        - Years on ART: {patient_data.get('YEARS ON ART')}
+        - BP History: {patient_data.get('BP HISTORY')}
+        - Exercises: {patient_data.get('EXERCISES')}
+
+        Provide ONLY 4-6 recommendations.
+
+        Rules:
+        - No bullet points
+        - No stars
+        - No numbering
+        - No introduction or explanation
+        - Each recommendation must be on a new line
+        """
+
+        response = gemini_model.generate_content(prompt)
+        # response = gemini_model.generate_content(prompt, request_options={"timeout": 5})
+
+        # Clean response into list
+        # text = response.text.strip()
+        # recommendations = [line.strip("-• ") for line in text.split("\n") if line.strip()]
+        text = response.text.strip()
+
+        recommendations = []
+        for line in text.split("\n"):
+            line = line.strip("-• ").strip()
+            if line:
+                recommendations.append(line)
+
+        # Limit to 6 max
+        recommendations = recommendations[:6]
+
+        return recommendations if recommendations else RECOMMENDATIONS[risk_level]
+
+    except Exception as e:
+        logger.error(f"Gemini failed: {e}")
+        return RECOMMENDATIONS[risk_level]
 
 @app.route('/')
 def home():
@@ -313,7 +386,8 @@ def assess_risk():
             }), 500
 
         # Get static recommendations (no AI)
-        recommendations = get_recommendations(risk_level)
+        # recommendations = get_recommendations(risk_level)
+        recommendations = get_recommendations(risk_level, data)
 
         response = {
             "patientId": data.get('patientId', f"patient-{int(time.time() * 1000)}"),
@@ -376,7 +450,8 @@ def model_info():
 if __name__ == '__main__':
     logger.info(f"Starting Hypertension Risk Prediction API - MODEL ONLY mode")
     logger.info(f"Looking for model file: {MODEL_FILENAME}")
-    logger.info("Gemini AI is DISABLED - using static recommendations only")
+    logger.info("Gemini AI is ENABLED with dynamic recommendations")
+    # logger.info("Gemini AI is DISABLED - using static recommendations only")
     
     # The app will only start if model loads successfully
     # If model fails to load, it will raise an exception
