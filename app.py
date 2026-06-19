@@ -90,13 +90,6 @@ RECOMMENDATIONS = {
         "Strict dietary sodium restriction",
         "Regular cardiovascular assessment"
     ],
-    'Moderate': [
-        "Lifestyle modifications recommended",
-        "Monitor blood pressure monthly",
-        "Consider starting low-dose antihypertensive if other risk factors present",
-        "Encourage regular physical activity",
-        "Dietary counseling for weight management"
-    ],
     'Low': [
         "Continue current management",
         "Monitor blood pressure every 3-6 months",
@@ -260,10 +253,16 @@ def calculate_risk_level(probability: float) -> str:
     """Convert probability to risk level"""
     if probability >= 0.6:
         return "High"
-    elif probability >= 0.3:
-        return "Moderate"
     else:
         return "Low"
+# def calculate_risk_level(probability: float) -> str:
+#     """Convert probability to risk level"""
+#     if probability >= 0.6:
+#         return "High"
+#     elif probability >= 0.3:
+#         return "Moderate"
+#     else:
+#         return "Low"
 
 # REMOVED Gemini AI function - using static recommendations only
 # def get_recommendations(risk_level: str) -> list:
@@ -271,10 +270,6 @@ def calculate_risk_level(probability: float) -> str:
 #     return RECOMMENDATIONS[risk_level]
 
 def get_recommendations(risk_level: str, patient_data: dict) -> list:
-
-     # Convert Moderate to Low for Gemini
-    if risk_level == 'Moderate':
-        risk_level = 'Low'
     """
     Generate recommendations using Gemini AI with fallback to static
     """
