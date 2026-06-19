@@ -379,11 +379,18 @@ def assess_risk():
             return jsonify({'error': 'Failed to process input data'}), 500
 
         # Make prediction using ONLY the trained model
+            # Make prediction using ONLY the trained model
         try:
             predicted_class = model.predict(input_processed)[0]
             prediction_proba = model.predict_proba(input_processed)[0][1]
             
             risk_level = calculate_risk_level(prediction_proba)
+            
+            # Only show "Hypertension" for High risk, otherwise "No Hypertension"
+            if risk_level == "High":
+                prediction_text = "Hypertension"
+            else:
+                prediction_text = "No Hypertension"
             
             logger.info(f"Model predicted: Class = {predicted_class}, Probability = {prediction_proba:.4f}, Risk Level = {risk_level}")
         except Exception as e:
@@ -393,6 +400,20 @@ def assess_risk():
                 'message': 'Model prediction failed',
                 'details': str(e)
             }), 500
+        # try:
+        #     predicted_class = model.predict(input_processed)[0]
+        #     prediction_proba = model.predict_proba(input_processed)[0][1]
+            
+        #     risk_level = calculate_risk_level(prediction_proba)
+            
+        #     logger.info(f"Model predicted: Class = {predicted_class}, Probability = {prediction_proba:.4f}, Risk Level = {risk_level}")
+        # except Exception as e:
+        #     logger.error(f"Error during model prediction: {str(e)}", exc_info=True)
+        #     return jsonify({
+        #         'error': True,
+        #         'message': 'Model prediction failed',
+        #         'details': str(e)
+        #     }), 500
 
         # Get static recommendations (no AI)
         # recommendations = get_recommendations(risk_level)
@@ -404,7 +425,8 @@ def assess_risk():
             "riskLevel": risk_level,
             "probability": round(prediction_proba, 4),
             "riskScore": f"{prediction_proba:.1%}",
-            "prediction": "Hypertension" if predicted_class == 1 else "No Hypertension",
+            "prediction": prediction_text,
+            # "prediction": "Hypertension" if predicted_class == 1 else "No Hypertension",
             "recommendations": recommendations,
             "timestamp": datetime.utcnow().isoformat() + 'Z',
             "inputFeatures": {k: v for k, v in data.items() if k in (selected_features or [])},
