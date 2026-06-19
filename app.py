@@ -129,11 +129,9 @@ def load_model_artifacts(filepath):
         return None, None, None, None, FEATURE_COLUMNS, {}
 
 # Load the specific model file
-MODEL_FILENAME = 'hypertension_model_20260308_181557 (1).pkl'
+# MODEL_FILENAME = 'hypertension_model_20260308_181557 (1).pkl'
 # Load the specific model file
-# MODEL_FILENAME = 'hypertension_model_enhanced_current (2).pkl'
-# Load the specific model file
-# MODEL_FILENAME = 'hypertension_model_enhanced_20260619_033515.pkl'
+MODEL_FILENAME = 'cardiovascular_risk_model_current (1).pkl'
 
 # Try different locations to find the model
 model_paths = [
