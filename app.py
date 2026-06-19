@@ -112,8 +112,8 @@ def load_model_artifacts(filepath):
         artifacts = load(filepath)
         
         # Extract all components
-        # model_obj = artifacts.get('model')
-        model_obj = artifacts.get('binary_model')
+        model_obj = artifacts.get('model')
+        # model_obj = artifacts.get('binary_model')
         selector_obj = artifacts.get('selector')
         scaler_obj = artifacts.get('scaler')
         selected_feats = artifacts.get('selected_features')
@@ -129,9 +129,9 @@ def load_model_artifacts(filepath):
         return None, None, None, None, FEATURE_COLUMNS, {}
 
 # Load the specific model file
-# MODEL_FILENAME = 'hypertension_model_20260308_181557 (1).pkl'
+MODEL_FILENAME = 'hypertension_model_20260308_181557 (1).pkl'
 # Load the specific model file
-MODEL_FILENAME = 'hypertension_model_enhanced_current (2).pkl'
+# MODEL_FILENAME = 'hypertension_model_enhanced_current (2).pkl'
 # Load the specific model file
 # MODEL_FILENAME = 'hypertension_model_enhanced_20260619_033515.pkl'
 
@@ -273,6 +273,10 @@ def calculate_risk_level(probability: float) -> str:
 #     return RECOMMENDATIONS[risk_level]
 
 def get_recommendations(risk_level: str, patient_data: dict) -> list:
+
+     # Convert Moderate to Low for Gemini
+    if risk_level == 'Moderate':
+        risk_level = 'Low'
     """
     Generate recommendations using Gemini AI with fallback to static
     """
